@@ -2,20 +2,19 @@ import os
 import time
 import requests
 import pandas as pd
-from flask import Flask, request, jsonify
+from flask import Flask, request
 
 app = Flask(__name__)
 
-# === Telegram Bot Setup ===
+# === Your Telegram Bot Token ===
 BOT_TOKEN = "7646470360:AAH25-iQhphoP5RmZK7vmLoP4yxlqU2R140"
-TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
-CHAT_ID = "@DarrellScalpBot"
+TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-# === Binance Price Fetching ===
+# === Binance API for price data ===
 def get_binance_klines(symbol="BTCUSDT", interval="15m", limit=100):
     url = f"https://api.binance.com/api/v3/klines"
     params = {"symbol": symbol, "interval": interval, "limit": limit}
-    response = requests.get(url, timeout=10)
+    response = requests.get(url)
     data = response.json()
     df = pd.DataFrame(data, columns=[
         "open_time", "open", "high", "low", "close", "volume",
@@ -25,7 +24,7 @@ def get_binance_klines(symbol="BTCUSDT", interval="15m", limit=100):
     df["close"] = df["close"].astype(float)
     return df
 
-# === Indicators ===
+# === Technical Indicators ===
 def calculate_indicators(df):
     df["EMA_9"] = df["close"].ewm(span=9, adjust=False).mean()
     df["EMA_21"] = df["close"].ewm(span=21, adjust=False).mean()
@@ -48,7 +47,7 @@ def compute_macd(series):
     signal = macd.ewm(span=9, adjust=False).mean()
     return macd, signal
 
-# === Signal Logic ===
+# === Signal Generator ===
 def generate_signal(df):
     last = df.iloc[-1]
     ema_cross = "BUY" if last["EMA_9"] > last["EMA_21"] else "SELL"
@@ -59,55 +58,48 @@ def generate_signal(df):
     decision = max(set(votes), key=votes.count)
     return decision, round(last["RSI"], 2)
 
-# === Telegram Messaging ===
-def send_telegram_message(pair, signal, rsi_value):
+# === Send Telegram Message ===
+def send_telegram_message(chat_id, pair, signal, rsi_value):
     text = f"📉 *{pair} Signal*\n" \
            f"Strategy: EMA + RSI + MACD\n" \
            f"Signal: *{signal}*\n" \
            f"RSI: {rsi_value}"
     payload = {
-        "chat_id": CHAT_ID,
+        "chat_id": chat_id,
         "text": text,
         "parse_mode": "Markdown"
     }
-    try:
-        requests.post(f"{TELEGRAM_API_URL}/sendMessage", data=payload, timeout=10)
-    except Exception as e:
-        print(f"Failed to send message: {e}")
+    requests.post(TELEGRAM_API_URL, data=payload)
 
-# === Routes ===
+# === Webhook Root ===
 @app.route("/", methods=["GET"])
 def home():
-    return "Bot is live."
+    return "Bot is running."
 
-@app.route("/run-signal", methods=["POST"])
-def run_signal():
-    for symbol in ["BTCUSDT", "XAUUSDT"]:
-        df = get_binance_klines(symbol)
-        df = calculate_indicators(df)
-        signal, rsi = generate_signal(df)
-        send_telegram_message(symbol, signal, rsi)
-        time.sleep(1)
-    return "Signals Sent", 200
-
+# === Telegram Webhook Handler ===
 @app.route("/webhook", methods=["POST"])
-def telegram_webhook():
+def webhook():
     data = request.get_json()
-    
-    # Optional: Basic auto-reply to any text messages
-    if "message" in data:
+    if "message" in data and "text" in data["message"]:
+        text = data["message"]["text"]
         chat_id = data["message"]["chat"]["id"]
-        text = "✅ Signal bot is active. Please wait for alerts."
-        requests.post(f"{TELEGRAM_API_URL}/sendMessage", data={
-            "chat_id": chat_id,
-            "text": text
-        })
 
-    return jsonify({"status": "ok"}), 200
+        if text.lower() == "/signal":
+            for symbol in ["BTCUSDT", "XAUUSDT"]:
+                df = get_binance_klines(symbol)
+                df = calculate_indicators(df)
+                signal, rsi = generate_signal(df)
+                send_telegram_message(chat_id, symbol, signal, rsi)
+                time.sleep(1)
 
-# === Entry point for Render ===
+            return "Signals sent", 200
+
+    return "No valid message received", 200
+
+# === Flask Local Run ===
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port, debug=True)
+
  
 
