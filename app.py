@@ -97,9 +97,12 @@ def webhook():
     return "No valid message received", 200
 
 # === Flask Local Run ===
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+import os
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))  # Use the PORT Render provides
+    app.run(host='0.0.0.0', port=port)
+
 
  
 
