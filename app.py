@@ -2,20 +2,20 @@ import os
 import time
 import requests
 import pandas as pd
-from flask import Flask, request
+from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-# === Your Telegram Bot Token and Chat ID ===
+# === Telegram Bot Setup ===
 BOT_TOKEN = "7646470360:AAH25-iQhphoP5RmZK7vmLoP4yxlqU2R140"
-TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-CHAT_ID = "@DarrellScalpBot"  # You may also use a specific user/group ID
+TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
+CHAT_ID = "@DarrellScalpBot"
 
-# === Binance API URL for price data ===
+# === Binance Price Fetching ===
 def get_binance_klines(symbol="BTCUSDT", interval="15m", limit=100):
     url = f"https://api.binance.com/api/v3/klines"
     params = {"symbol": symbol, "interval": interval, "limit": limit}
-    response = requests.get(url)
+    response = requests.get(url, timeout=10)
     data = response.json()
     df = pd.DataFrame(data, columns=[
         "open_time", "open", "high", "low", "close", "volume",
@@ -25,7 +25,7 @@ def get_binance_klines(symbol="BTCUSDT", interval="15m", limit=100):
     df["close"] = df["close"].astype(float)
     return df
 
-# === Technical Indicators ===
+# === Indicators ===
 def calculate_indicators(df):
     df["EMA_9"] = df["close"].ewm(span=9, adjust=False).mean()
     df["EMA_21"] = df["close"].ewm(span=21, adjust=False).mean()
@@ -35,8 +35,8 @@ def calculate_indicators(df):
 
 def compute_rsi(series, period=14):
     delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    gain = delta.where(delta > 0, 0).rolling(window=period).mean()
+    loss = -delta.where(delta < 0, 0).rolling(window=period).mean()
     rs = gain / loss
     rsi = 100 - (100 / (1 + rs))
     return rsi
@@ -48,7 +48,7 @@ def compute_macd(series):
     signal = macd.ewm(span=9, adjust=False).mean()
     return macd, signal
 
-# === Signal Generator ===
+# === Signal Logic ===
 def generate_signal(df):
     last = df.iloc[-1]
     ema_cross = "BUY" if last["EMA_9"] > last["EMA_21"] else "SELL"
@@ -59,7 +59,7 @@ def generate_signal(df):
     decision = max(set(votes), key=votes.count)
     return decision, round(last["RSI"], 2)
 
-# === Telegram Notification ===
+# === Telegram Messaging ===
 def send_telegram_message(pair, signal, rsi_value):
     text = f"📉 *{pair} Signal*\n" \
            f"Strategy: EMA + RSI + MACD\n" \
@@ -70,12 +70,15 @@ def send_telegram_message(pair, signal, rsi_value):
         "text": text,
         "parse_mode": "Markdown"
     }
-    requests.post(TELEGRAM_API_URL, data=payload)
+    try:
+        requests.post(f"{TELEGRAM_API_URL}/sendMessage", data=payload, timeout=10)
+    except Exception as e:
+        print(f"Failed to send message: {e}")
 
-# === Endpoint for webhook trigger ===
+# === Routes ===
 @app.route("/", methods=["GET"])
 def home():
-    return "Bot is running."
+    return "Bot is live."
 
 @app.route("/run-signal", methods=["POST"])
 def run_signal():
@@ -85,13 +88,26 @@ def run_signal():
         signal, rsi = generate_signal(df)
         send_telegram_message(symbol, signal, rsi)
         time.sleep(1)
-    return "Signals Sent!", 200
+    return "Signals Sent", 200
 
-# === Run locally (ignored on Render) ===
-if __name__ == "__main__":
-    import os
+@app.route("/webhook", methods=["POST"])
+def telegram_webhook():
+    data = request.get_json()
+    
+    # Optional: Basic auto-reply to any text messages
+    if "message" in data:
+        chat_id = data["message"]["chat"]["id"]
+        text = "✅ Signal bot is active. Please wait for alerts."
+        requests.post(f"{TELEGRAM_API_URL}/sendMessage", data={
+            "chat_id": chat_id,
+            "text": text
+        })
 
+    return jsonify({"status": "ok"}), 200
+
+# === Entry point for Render ===
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host="0.0.0.0", port=port)
+ 
 
